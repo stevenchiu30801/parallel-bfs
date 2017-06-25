@@ -49,30 +49,6 @@ cl_mem _clCreateBuf(cl_context context, cl_mem_flags flags, int size, void* h_me
 	return d_mem;
 }
 
-cl_mem _clCreateImg2D(cl_context context, cl_mem_flags flags, int width, int height, int row_pitch, void *h_mem_ptr){
-	cl_int err;
-	cl_image_format imgformat;
-	imgformat.image_channel_order = CL_RGBA;
-	imgformat.image_channel_data_type = CL_SNORM_INT8;
-	cl_mem d_mem = clCreateImage2D(context, flags, &imgformat, width, height, row_pitch, h_mem_ptr, &err);
-	if(err != CL_SUCCESS){
-		cerr << "Unable to create image\n";
-		if(err == CL_INVALID_IMAGE_FORMAT_DESCRIPTOR)
-			cerr << "CL_INVALID_IMAGE_FORMAT_DESCRIPTOR\n";
-		else if(err == CL_INVALID_IMAGE_SIZE)
-			cerr << "CL_INVALID_IMAGE_SIZE\n";
-		else if(err == CL_INVALID_HOST_PTR)
-			cerr << "CL_INVALID_HOST_PTR\n";
-		else if(err == CL_IMAGE_FORMAT_NOT_SUPPORTED)
-			cerr << "CL_IMAGE_FORMAT_NOT_SUPPORTED\n";
-		else if(err == CL_MEM_OBJECT_ALLOCATION_FAILURE)
-			cerr << "CL_MEM_OBJECT_ALLOCATION_FAILURE\n";
-		exit(1);
-	}
-
-	return d_mem;
-}
-
 void _clMemcpyH2D(cl_command_queue queue, cl_mem d_mem, int size, const void *h_mem_ptr){
 	cl_int err;
 	err = clEnqueueWriteBuffer(queue, d_mem, CL_TRUE, 0, size, h_mem_ptr, 0, NULL, NULL);
@@ -102,7 +78,7 @@ void _clMemcpyD2H(cl_command_queue queue, cl_mem d_mem, int size, void *h_mem_pt
 	}
 }
 
-cl_program load_program(cl_context context, const char* clfile){
+cl_program load_program(cl_context context, const char* clfile, cl_device_id devices){
 	ifstream fin(clfile, ios::in | ios::binary);
 	if(!fin.good()){
 		cerr << "Unable to open file\n";
@@ -144,8 +120,24 @@ cl_program load_program(cl_context context, const char* clfile){
 			cerr << "CL_INVALID_OPERATION\n";
 		else if(err == CL_COMPILER_NOT_AVAILABLE)
 			cerr << "CL_COMPILER_NOT_AVAILABLE\n";
-		else if(err == CL_BUILD_PROGRAM_FAILURE)
+		else if(err == CL_BUILD_PROGRAM_FAILURE){
 			cerr << "CL_BUILD_PROGRAM_FAILURE\n";
+
+			// Determine the size of the log
+		    size_t log_size;
+		    clGetProgramBuildInfo(program, devices, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+
+		    // Allocate memory for the log
+		    char *log = new char[log_size];
+
+		    // Get the log
+		    clGetProgramBuildInfo(program, devices, CL_PROGRAM_BUILD_LOG, log_size, log, NULL);
+
+		    // Print the log
+		    cerr << log << endl;
+
+		    delete [] log;
+		}
 		return NULL;
 	}
 
@@ -158,9 +150,9 @@ int main(int argc, char **argv){
 		exit(1);
 	}
 
-	int x_size, y_size;	// map size
+	int x_size, y_size, area;	// map size
 	int x_start, y_start, x_end, y_end;	// start and end point
-	int **map;
+	int *map;
 
 	char buf[MAX_LINE];
 	char *pch;
@@ -178,13 +170,11 @@ int main(int argc, char **argv){
 
 	x_size++;
 	y_size++;
+	area = x_size * y_size;
 
-	map = new int*[x_size];
-	for(int i = 0; i < x_size; i++){
-		map[i] = new int[y_size];
-		for(int j = 0; j < y_size; j++)
-			map[i][j] = -1;
-	}
+	map = new int[area];
+	for(int i = 0; i < area; i++)
+		map[i] = -1;
 
 	file.getline(buf, MAX_LINE, '\n');
 	pch = strtok(buf, " ");
@@ -213,19 +203,19 @@ int main(int argc, char **argv){
 		if(x <= _x && y <= _y)
 			for(int i = x; i <= _x; i++)
 				for(int j = y; j <= _y; j++)
-					map[i][j] = -2;
+					map[i + j * x_size] = -2;
 		else if(x <= _x && y >= _y)
 			for(int i = x; i <= _x; i++)
 				for(int j = y; j >= _y; j--)
-					map[i][j] = -2;
+					map[i + j * x_size] = -2;
 		else if(x >= _x && y <= _y)
 			for(int i = _x; i >= x; i--)
 				for(int j = y; j <= _y; j++)
-					map[i][j] = -2;
+					map[i + j * x_size] = -2;
 		else
 			for(int i = _x; i >= x; i--)
 				for(int j = _y; j >= y; j--)
-					map[i][j] = -2;
+					map[i + j * x_size] = -2;
 	}
 
 	file.close();
@@ -278,7 +268,7 @@ int main(int argc, char **argv){
 	// cout << "valid image width max size " << imgwidthsize << endl;
 
 	/***** create command queue *****/
-	cl_command_queue queue = clCreateCommandQueue(context, devices[0], 0, 0);
+	cl_command_queue queue = clCreateCommandQueue(context, devices[0], 0, NULL);
 	if(queue == 0){
 		cerr << "Cannot create command queue\n";
 		clReleaseContext(context);
@@ -292,8 +282,8 @@ int main(int argc, char **argv){
 	 *	dist
 	 *	done
 	 */
-	map[x_start][y_start] = -3;	// add mask to start point
-	cl_mem cl_map = _clCreateImg2D(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, x_size, y_size, 0, &map[0][0]);
+	map[x_start + y_start * x_size] = -3;	// add mask to start point
+	cl_mem cl_map = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int) * area, &map[0]);
 	cl_mem cl_x_size = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_size);
 	cl_mem cl_y_size = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &y_size);
 	cl_mem cl_x_end = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_end);
@@ -309,7 +299,7 @@ int main(int argc, char **argv){
 	// _clMemcpyH2D(queue, cl_y_end, sizeof(int), &y_end);
 
 	/***** load kernel file to memory *****/
-	cl_program program = load_program(context, "bfs_kernel.cl");
+	cl_program program = load_program(context, "bfs_kernel.cl", devices[0]);	// devicea[0] is for build log
 	if(program == NULL){
 		clReleaseMemObject(cl_map);
 		clReleaseMemObject(cl_x_size);
@@ -325,8 +315,8 @@ int main(int argc, char **argv){
 	}
 
 	/***** create kernel object *****/
-	cl_kernel kernel = clCreateKernel(program, "bfs", 0);	// "bfs" is the function name in "bfs_kernel.cl"
-	if(kernel == NULL){
+	cl_kernel kernel_1 = clCreateKernel(program, "bfs", 0);	// "bfs" is the function name in "bfs_kernel.cl"
+	if(kernel_1 == NULL){
 		clReleaseProgram(program);
 		clReleaseMemObject(cl_map);
 		clReleaseMemObject(cl_x_size);
@@ -340,12 +330,28 @@ int main(int argc, char **argv){
 		clReleaseContext(context);
 		exit(1);
 	}
+	cl_kernel kernel_2 = clCreateKernel(program, "mask", 0);	// "bfs" is the function name in "bfs_kernel.cl"
+	if(kernel_2 == NULL){
+		clReleaseKernel(kernel_1);
+		clReleaseProgram(program);
+		clReleaseMemObject(cl_map);
+		clReleaseMemObject(cl_x_size);
+		clReleaseMemObject(cl_y_size);
+		clReleaseMemObject(cl_x_end);
+		clReleaseMemObject(cl_y_end);
+		clReleaseMemObject(cl_dist);
+		clReleaseMemObject(cl_done);
+		clReleaseMemObject(cl_found);
+		clReleaseCommandQueue(queue);
+		clReleaseContext(context);
+		exit(1);
+	}
+	// cout << "OpenCL setting done\n";
 	/***** end of OpenCL environment setting *****/
-
-	cout << "OpenCL setting done\n";
 
 	/***** breadth-first search *****/
 	/*	map value notation
+	 *	-4 : pre-mask, points to be traversed next stage
 	 *	-3 : mask, points to be traversed next stage
 	 *	-2 : blockages
 	 *	-1 : untraversed points
@@ -353,32 +359,56 @@ int main(int argc, char **argv){
 	 */
 	int dist = -1;
 	_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
-	bool found = false;	// true if end point is found
+	bool found = 0;	// true if end point is found
 	_clMemcpyH2D(queue, cl_found, sizeof(bool), &found);
 	bool done;
 
 	do{
-		done = true;	// true if bfs is done, i.e. all accessible points are traversed
+		done = 1;	// true if bfs is done, i.e. all accessible points are traversed
 		_clMemcpyH2D(queue, cl_done, sizeof(bool), &done);
 		dist++;	// distance from start point within this stage
 		_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
 
-		/***** set kernel argument *****/
+		/***** set kernel_1 argument *****/
 		int arg_idx = 0;
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_map);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_x_size);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_y_size);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_x_end);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_y_end);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_dist);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_done);
-		clSetKernelArg(kernel, arg_idx++, sizeof(cl_mem), &cl_found);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_map);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_size);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_y_size);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_end);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_y_end);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_dist);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_done);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_found);
 
-		/***** enqueue command to execute kernel *****/
+		/***** enqueue command to execute kernel_1 *****/
 		size_t work_size[2] = {(size_t)x_size, (size_t)y_size};
-		err = clEnqueueNDRangeKernel(queue, kernel, 2, 0, work_size, NULL, 0, NULL, NULL);
+		err = clEnqueueNDRangeKernel(queue, kernel_1, 2, 0, work_size, NULL, 0, NULL, NULL);
 		if(err != CL_SUCCESS){
-			clReleaseKernel(kernel);
+			clReleaseKernel(kernel_1);
+			clReleaseKernel(kernel_2);
+			clReleaseProgram(program);
+			clReleaseMemObject(cl_map);
+			clReleaseMemObject(cl_x_size);
+			clReleaseMemObject(cl_y_size);
+			clReleaseMemObject(cl_x_end);
+			clReleaseMemObject(cl_y_end);
+			clReleaseMemObject(cl_dist);
+			clReleaseMemObject(cl_done);
+			clReleaseMemObject(cl_found);
+			clReleaseCommandQueue(queue);
+			clReleaseContext(context);
+			exit(1);
+		}
+
+		/***** set kernel_2 argument *****/
+		arg_idx = 0;
+		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_map);
+
+		/***** enqueue command to execute kernel_2 *****/
+		err = clEnqueueNDRangeKernel(queue, kernel_2, 2, 0, work_size, NULL, 0, NULL, NULL);
+		if(err != CL_SUCCESS){
+			clReleaseKernel(kernel_1);
+			clReleaseKernel(kernel_2);
 			clReleaseProgram(program);
 			clReleaseMemObject(cl_map);
 			clReleaseMemObject(cl_x_size);
@@ -396,15 +426,15 @@ int main(int argc, char **argv){
 		_clMemcpyD2H(queue, cl_done, sizeof(bool), &done);
 		_clMemcpyD2H(queue, cl_found, sizeof(bool), &found);
 	}while(done == false && found == false);
-
+	// cout << "Breadth-first search done\n";
 	/***** end of breadth-first search *****/
 
 	/***** output file *****/
-	_clMemcpyD2H(queue, cl_map, sizeof(int) * x_size * y_size, &map);
+	_clMemcpyD2H(queue, cl_map, sizeof(int) * area, &map[0]);
 
-	if(map[x_end][y_end] == -1){	// no path from start point to end point
-		// cout << "There is no path from (" << x_start << ", " << y_start
-		// 	<< ") to (" << x_end << ", " << y_end << ")\n";
+	if(map[x_end + y_end * x_size] == -1){	// no path from start point to end point
+		cout << "There is no path from (" << x_start << ", " << y_start
+			<< ") to (" << x_end << ", " << y_end << ")\n";
 
 		char *outfile = new char[strlen(argv[1] + 6)];
 		sprintf(outfile, "path_%s", argv[1]);
@@ -417,31 +447,36 @@ int main(int argc, char **argv){
 		fout.close();
 	}
 	else{
-		// cout << "Shortest distance from (" << x_start << ", " << y_start
-		// 	<< ") to (" << x_end << ", " << y_end << ") : " << map[x_end][y_end] << endl;
+		cout << "Shortest distance from (" << x_start << ", " << y_start
+			<< ") to (" << x_end << ", " << y_end << ") : " << map[x_end + y_end * x_size] << endl;
 
 		/***** backtrack the path *****/
 		stack<Node> path;
-		int dist = map[x_end][y_end] - 1;
+		int dist = map[x_end + y_end * x_size] - 1;
 		Node u(x_end, y_end);
 		path.push(u);
+		// cout << u.x << " " << u.y << endl;
 
 		while(dist >= 0){
 			int xtmp = u.x, ytmp = u.y;
-			if(xtmp != 0 && map[xtmp - 1][ytmp] == dist){
+			if(xtmp != 0 && map[(xtmp - 1) + ytmp * x_size] == dist){
 				u.x--;
+				// cout << u.x << " " << u.y << endl;
 				path.push(u);
 			}
-			else if(xtmp != x_size - 1 && map[xtmp + 1][ytmp] == dist){
+			else if(xtmp != x_size - 1 && map[(xtmp + 1) + ytmp * x_size] == dist){
 				u.x++;
+				// cout << u.x << " " << u.y << endl;
 				path.push(u);
 			}
-			else if(ytmp != 0 && map[xtmp][ytmp - 1] == dist){
+			else if(ytmp != 0 && map[xtmp + (ytmp - 1) * x_size] == dist){
 				u.y--;
+				// cout << u.x << " " << u.y << endl;
 				path.push(u);
 			}
 			else{
 				u.y++;
+				// cout << u.x << " " << u.y << endl;
 				path.push(u);
 			}
 
@@ -454,7 +489,7 @@ int main(int argc, char **argv){
 		fstream fout;
 		fout.open(outfile, ios::out);
 
-		sprintf(buf, "%d\n", map[x_end][y_end]);
+		sprintf(buf, "%d\n", map[x_end + y_end * x_size]);
 		fout.write(buf, strlen(buf));
 
 		for(int i = path.size(); i > 0; i--){
@@ -471,12 +506,11 @@ int main(int argc, char **argv){
 	/***** end of output file *****/
 
 	/***** deallocate memory *****/
-	for(int i = 0; i < x_size; i++)
-		delete [] map[i];
 	delete [] map;
 
 	/***** release OpenCL resources *****/
-	clReleaseKernel(kernel);
+	clReleaseKernel(kernel_1);
+	clReleaseKernel(kernel_2);
 	clReleaseProgram(program);
 	clReleaseMemObject(cl_map);
 	clReleaseMemObject(cl_x_size);
