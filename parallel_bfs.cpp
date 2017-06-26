@@ -153,6 +153,7 @@ int main(int argc, char **argv){
 	int x_size, y_size, area;	// map size
 	int x_start, y_start, x_end, y_end;	// start and end point
 	int *map;
+	bool *mask;
 
 	char buf[MAX_LINE];
 	char *pch;
@@ -175,6 +176,9 @@ int main(int argc, char **argv){
 	map = new int[area];
 	for(int i = 0; i < area; i++)
 		map[i] = -1;
+	mask = new bool[area];
+	for(int i = 0; i < area; i++)
+		mask[i] = false;
 
 	file.getline(buf, MAX_LINE, '\n');
 	pch = strtok(buf, " ");
@@ -276,7 +280,8 @@ int main(int argc, char **argv){
 	}
 
 	/***** create buffer/image on device *****/
-	/*	map[][]
+	/*	map[]
+	 *	mask[]
 	 *	x_size, y_size
 	 *	x_end, y_end
 	 *	dist
@@ -284,6 +289,7 @@ int main(int argc, char **argv){
 	 */
 	map[x_start + y_start * x_size] = -3;	// add mask to start point
 	cl_mem cl_map = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int) * area, &map[0]);
+	cl_mem cl_mask = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(bool) * area, &mask[0]);
 	cl_mem cl_x_size = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_size);
 	cl_mem cl_y_size = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &y_size);
 	cl_mem cl_x_end = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_end);
@@ -302,6 +308,7 @@ int main(int argc, char **argv){
 	cl_program program = load_program(context, "bfs_kernel.cl", devices[0]);	// devicea[0] is for build log
 	if(program == NULL){
 		clReleaseMemObject(cl_map);
+		clReleaseMemObject(cl_mask);
 		clReleaseMemObject(cl_x_size);
 		clReleaseMemObject(cl_y_size);
 		clReleaseMemObject(cl_x_end);
@@ -351,7 +358,6 @@ int main(int argc, char **argv){
 
 	/***** breadth-first search *****/
 	/*	map value notation
-	 *	-4 : pre-mask, points to be traversed next stage
 	 *	-3 : mask, points to be traversed next stage
 	 *	-2 : blockages
 	 *	-1 : untraversed points
@@ -359,12 +365,12 @@ int main(int argc, char **argv){
 	 */
 	int dist = -1;
 	_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
-	bool found = 0;	// true if end point is found
+	bool found = false;	// true if end point is found
 	_clMemcpyH2D(queue, cl_found, sizeof(bool), &found);
 	bool done;
 
 	do{
-		done = 1;	// true if bfs is done, i.e. all accessible points are traversed
+		done = true;	// true if bfs is done, i.e. all accessible points are traversed
 		_clMemcpyH2D(queue, cl_done, sizeof(bool), &done);
 		dist++;	// distance from start point within this stage
 		_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
@@ -372,6 +378,7 @@ int main(int argc, char **argv){
 		/***** set kernel_1 argument *****/
 		int arg_idx = 0;
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_map);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mask), &cl_mask);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_size);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_y_size);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_end);
@@ -403,6 +410,7 @@ int main(int argc, char **argv){
 		/***** set kernel_2 argument *****/
 		arg_idx = 0;
 		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_map);
+		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_mask);
 
 		/***** enqueue command to execute kernel_2 *****/
 		err = clEnqueueNDRangeKernel(queue, kernel_2, 2, 0, work_size, NULL, 0, NULL, NULL);
@@ -507,12 +515,14 @@ int main(int argc, char **argv){
 
 	/***** deallocate memory *****/
 	delete [] map;
+	delete [] mask;
 
 	/***** release OpenCL resources *****/
 	clReleaseKernel(kernel_1);
 	clReleaseKernel(kernel_2);
 	clReleaseProgram(program);
 	clReleaseMemObject(cl_map);
+	clReleaseMemObject(cl_mask);
 	clReleaseMemObject(cl_x_size);
 	clReleaseMemObject(cl_y_size);
 	clReleaseMemObject(cl_x_end);

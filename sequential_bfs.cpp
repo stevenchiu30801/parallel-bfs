@@ -27,7 +27,7 @@ Node::Node(const Node &c){
 
 int main(int argc, char **argv){
 	if(argc != 2){
-		cout << "Incorrect input. Usage: " << argv[0] << " <map>\n";
+		cerr << "Incorrect input. Usage: " << argv[0] << " <map>\n";
 	}
 
 	int x_size, y_size;	// map size
@@ -144,8 +144,8 @@ int main(int argc, char **argv){
 
 	/***** output file *****/
 	if(map[x_end][y_end] == -1){	// no path from start point to end point
-		// cout << "There is no path from (" << x_start << ", " << y_start
-		// 	<< ") to (" << x_end << ", " << y_end << ")\n";
+		cout << "There is no path from (" << x_start << ", " << y_start
+			<< ") to (" << x_end << ", " << y_end << ")\n";
 
 		char *outfile = new char[strlen(argv[1] + 6)];
 		sprintf(outfile, "path_%s", argv[1]);
@@ -158,8 +158,8 @@ int main(int argc, char **argv){
 		fout.close();
 	}
 	else{
-		// cout << "Shortest distance from (" << x_start << ", " << y_start
-		// 	<< ") to (" << x_end << ", " << y_end << ") : " << map[x_end][y_end] << endl;
+		cout << "Shortest distance from (" << x_start << ", " << y_start
+			<< ") to (" << x_end << ", " << y_end << ") : " << map[x_end][y_end] << endl;
 
 		/***** backtrack the path *****/
 		stack<Node> path;
