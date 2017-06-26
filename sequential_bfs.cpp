@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <queue>
 #include <stack>
+#include <sys/time.h>
+#include <iomanip>
 #define MAX_LINE 25
 
 using namespace std;
@@ -37,15 +39,18 @@ int main(int argc, char **argv){
 	char buf[MAX_LINE];
 	char *pch;
 
+	struct timeval start, end;
+	float elapsedtime;
+
 	/***** reading file *****/
 	fstream file;
 	file.open(argv[1], ios::in);
 
 	/***** map initialization *****/
-	file.getline(buf, MAX_LINE, '\n');
-	pch = strtok(buf, " ");
+	file.getline(buf, MAX_LINE, '\r');
+	pch = strtok(buf, " \n");
 	x_size = atoi(pch);
-	pch = strtok(NULL, " ");
+	pch = strtok(NULL, " \n");
 	y_size = atoi(pch);
 
 	x_size++;
@@ -58,28 +63,30 @@ int main(int argc, char **argv){
 			map[i][j] = -1;
 	}
 
-	file.getline(buf, MAX_LINE, '\n');
-	pch = strtok(buf, " ");
+	file.getline(buf, MAX_LINE, '\r');
+	pch = strtok(buf, " \n");
 	x_start = atoi(pch);
-	pch = strtok(NULL, " ");
+	pch = strtok(NULL, " \n");
 	y_start = atoi(pch);
 
-	file.getline(buf, MAX_LINE, '\n');
-	pch = strtok(buf, " ");
+	file.getline(buf, MAX_LINE, '\r');
+	pch = strtok(buf, " \n");
 	x_end = atoi(pch);
-	pch = strtok(NULL, " ");
+	pch = strtok(NULL, " \n");
 	y_end = atoi(pch);
 
 	/***** blockages initialization *****/
-	while(file.getline(buf, MAX_LINE, '\n') != NULL){
+	while(file.getline(buf, MAX_LINE, '\r') != NULL){
 		int x, y, _x, _y;
-		pch = strtok(buf, " ");
+		pch = strtok(buf, " \n");
+		if(pch == NULL)	// avoid redundant new line character in the end
+			break;
 		x = atoi(pch);
-		pch = strtok(NULL, " ");
+		pch = strtok(NULL, " \n");
 		y = atoi(pch);
-		pch = strtok(NULL, " ");
+		pch = strtok(NULL, " \n");
 		_x = atoi(pch);
-		pch = strtok(NULL, " ");
+		pch = strtok(NULL, " \n");
 		_y = atoi(pch);
 
 		if(x <= _x && y <= _y)
@@ -102,6 +109,9 @@ int main(int argc, char **argv){
 
 	file.close();
 	/***** end of reading file and initializing *****/
+
+	/***** record the start time *****/
+	gettimeofday(&start, NULL);
 
 	/***** breadth-first search *****/
 	queue<Node> q;
@@ -141,6 +151,9 @@ int main(int argc, char **argv){
 		}
 	}
 	/***** end of breadth-first search *****/
+
+	/***** record the end time *****/
+	gettimeofday(&end, NULL);
 
 	/***** output file *****/
 	if(map[x_end][y_end] == -1){	// no path from start point to end point
@@ -211,6 +224,10 @@ int main(int argc, char **argv){
 		delete [] outfile;
 	}
 	/***** end of output file *****/
+
+	/***** calculate the elapsed time *****/
+	elapsedtime = (end.tv_sec - start.tv_sec) * 1.0 + (end.tv_usec - start.tv_usec) / 1000000.0;
+	cout << "Elapsed time: " << fixed << setprecision(2) << elapsedtime << " sec\n";
 
 	/***** deallocate memory *****/
 	for(int i = 0; i < x_size; i++)

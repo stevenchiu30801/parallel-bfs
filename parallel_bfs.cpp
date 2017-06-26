@@ -6,6 +6,8 @@
 #include <CL/cl.h>
 #include <vector>
 #include <stack>
+#include <sys/time.h>
+#include <iomanip>
 #define MAX_LINE 25
 
 using namespace std;
@@ -158,15 +160,18 @@ int main(int argc, char **argv){
 	char buf[MAX_LINE];
 	char *pch;
 
+	struct timeval start, end;
+	float elapsedtime;
+
 	/***** reading file *****/
 	fstream file;
 	file.open(argv[1], ios::in);
 
 	/***** map initialization *****/
-	file.getline(buf, MAX_LINE, '\n');
-	pch = strtok(buf, " ");
+	file.getline(buf, MAX_LINE, '\r');
+	pch = strtok(buf, " \n");
 	x_size = atoi(pch);
-	pch = strtok(NULL, " ");
+	pch = strtok(NULL, " \n");
 	y_size = atoi(pch);
 
 	x_size++;
@@ -180,28 +185,30 @@ int main(int argc, char **argv){
 	for(int i = 0; i < area; i++)
 		mask[i] = false;
 
-	file.getline(buf, MAX_LINE, '\n');
-	pch = strtok(buf, " ");
+	file.getline(buf, MAX_LINE, '\r');
+	pch = strtok(buf, " \n");
 	x_start = atoi(pch);
-	pch = strtok(NULL, " ");
+	pch = strtok(NULL, " \n");
 	y_start = atoi(pch);
 
-	file.getline(buf, MAX_LINE, '\n');
-	pch = strtok(buf, " ");
+	file.getline(buf, MAX_LINE, '\r');
+	pch = strtok(buf, " \n");
 	x_end = atoi(pch);
-	pch = strtok(NULL, " ");
+	pch = strtok(NULL, " \n");
 	y_end = atoi(pch);
 
 	/***** blockages initialization *****/
-	while(file.getline(buf, MAX_LINE, '\n') != NULL){
+	while(file.getline(buf, MAX_LINE, '\r') != NULL){
 		int x, y, _x, _y;
-		pch = strtok(buf, " ");
+		pch = strtok(buf, " \n");
+		if(pch == NULL)	// avoid redundant new line character in the end
+			break;
 		x = atoi(pch);
-		pch = strtok(NULL, " ");
+		pch = strtok(NULL, " \n");
 		y = atoi(pch);
-		pch = strtok(NULL, " ");
+		pch = strtok(NULL, " \n");
 		_x = atoi(pch);
-		pch = strtok(NULL, " ");
+		pch = strtok(NULL, " \n");
 		_y = atoi(pch);
 
 		if(x <= _x && y <= _y)
@@ -290,8 +297,6 @@ int main(int argc, char **argv){
 	map[x_start + y_start * x_size] = -3;	// add mask to start point
 	cl_mem cl_map = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int) * area, &map[0]);
 	cl_mem cl_mask = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(bool) * area, &mask[0]);
-	cl_mem cl_x_size = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_size);
-	cl_mem cl_y_size = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &y_size);
 	cl_mem cl_x_end = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_end);
 	cl_mem cl_y_end = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &y_end);
 	cl_mem cl_dist = _clCreateBuf(context, CL_MEM_READ_ONLY, sizeof(int), NULL);
@@ -299,8 +304,6 @@ int main(int argc, char **argv){
 	cl_mem cl_found = _clCreateBuf(context, CL_MEM_WRITE_ONLY, sizeof(bool), NULL);
 
 	/***** write buffer from host memory *****/
-	// _clMemcpyH2D(queue, cl_x_size, sizeof(int), &x_size);
-	// _clMemcpyH2D(queue, cl_y_size, sizeof(int), &y_size);
 	// _clMemcpyH2D(queue, cl_x_end, sizeof(int), &x_end);
 	// _clMemcpyH2D(queue, cl_y_end, sizeof(int), &y_end);
 
@@ -309,8 +312,6 @@ int main(int argc, char **argv){
 	if(program == NULL){
 		clReleaseMemObject(cl_map);
 		clReleaseMemObject(cl_mask);
-		clReleaseMemObject(cl_x_size);
-		clReleaseMemObject(cl_y_size);
 		clReleaseMemObject(cl_x_end);
 		clReleaseMemObject(cl_y_end);
 		clReleaseMemObject(cl_dist);
@@ -326,8 +327,6 @@ int main(int argc, char **argv){
 	if(kernel_1 == NULL){
 		clReleaseProgram(program);
 		clReleaseMemObject(cl_map);
-		clReleaseMemObject(cl_x_size);
-		clReleaseMemObject(cl_y_size);
 		clReleaseMemObject(cl_x_end);
 		clReleaseMemObject(cl_y_end);
 		clReleaseMemObject(cl_dist);
@@ -342,8 +341,6 @@ int main(int argc, char **argv){
 		clReleaseKernel(kernel_1);
 		clReleaseProgram(program);
 		clReleaseMemObject(cl_map);
-		clReleaseMemObject(cl_x_size);
-		clReleaseMemObject(cl_y_size);
 		clReleaseMemObject(cl_x_end);
 		clReleaseMemObject(cl_y_end);
 		clReleaseMemObject(cl_dist);
@@ -356,6 +353,9 @@ int main(int argc, char **argv){
 	// cout << "OpenCL setting done\n";
 	/***** end of OpenCL environment setting *****/
 
+	/***** reocrd the start time *****/
+	gettimeofday(&start, NULL);
+
 	/***** breadth-first search *****/
 	/*	map value notation
 	 *	-3 : mask, points to be traversed next stage
@@ -367,20 +367,31 @@ int main(int argc, char **argv){
 	_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
 	bool found = false;	// true if end point is found
 	_clMemcpyH2D(queue, cl_found, sizeof(bool), &found);
-	bool done;
+	bool done = false;
+	int itrcnt = 0;
+	const int itrmin = abs(x_end - x_start) + abs(y_end - y_start);
+
+	double kerneltime = 0.0, memcpytime = 0.0;	// in msec
+	struct timeval tmpstart, tmpend;
 
 	do{
-		done = true;	// true if bfs is done, i.e. all accessible points are traversed
-		_clMemcpyH2D(queue, cl_done, sizeof(bool), &done);
+		gettimeofday(&tmpstart, NULL);
+		/***** memory write from host to device *****/		
+		if(++itrcnt >= itrmin){
+			done = true;	// true if bfs is done, i.e. all accessible points are traversed
+			_clMemcpyH2D(queue, cl_done, sizeof(bool), &done);
+		}
 		dist++;	// distance from start point within this stage
 		_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
+		
+		gettimeofday(&tmpend, NULL);
+		memcpytime += (tmpend.tv_sec - tmpstart.tv_sec) * 1000.0 + (tmpend.tv_usec - tmpstart.tv_usec) / 1000.0;
 
+		gettimeofday(&tmpstart, NULL);
 		/***** set kernel_1 argument *****/
 		int arg_idx = 0;
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_map);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mask), &cl_mask);
-		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_size);
-		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_y_size);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_end);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_y_end);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_dist);
@@ -395,8 +406,6 @@ int main(int argc, char **argv){
 			clReleaseKernel(kernel_2);
 			clReleaseProgram(program);
 			clReleaseMemObject(cl_map);
-			clReleaseMemObject(cl_x_size);
-			clReleaseMemObject(cl_y_size);
 			clReleaseMemObject(cl_x_end);
 			clReleaseMemObject(cl_y_end);
 			clReleaseMemObject(cl_dist);
@@ -419,8 +428,6 @@ int main(int argc, char **argv){
 			clReleaseKernel(kernel_2);
 			clReleaseProgram(program);
 			clReleaseMemObject(cl_map);
-			clReleaseMemObject(cl_x_size);
-			clReleaseMemObject(cl_y_size);
 			clReleaseMemObject(cl_x_end);
 			clReleaseMemObject(cl_y_end);
 			clReleaseMemObject(cl_dist);
@@ -431,11 +438,25 @@ int main(int argc, char **argv){
 			exit(1);
 		}
 
-		_clMemcpyD2H(queue, cl_done, sizeof(bool), &done);
-		_clMemcpyD2H(queue, cl_found, sizeof(bool), &found);
+		gettimeofday(&tmpend, NULL);
+		kerneltime += (tmpend.tv_sec - tmpstart.tv_sec) * 1000.0 + (tmpend.tv_usec - tmpstart.tv_usec) / 1000.0;
+
+		/***** memory write from device to host *****/
+		if(itrcnt >= itrmin){
+			gettimeofday(&tmpstart, NULL);
+
+			_clMemcpyD2H(queue, cl_done, sizeof(bool), &done);
+			_clMemcpyD2H(queue, cl_found, sizeof(bool), &found);
+
+			gettimeofday(&tmpend, NULL);
+			memcpytime += (tmpend.tv_sec - tmpstart.tv_sec) * 1000.0 + (tmpend.tv_usec - tmpstart.tv_usec) / 1000.0;
+		}
 	}while(done == false && found == false);
 	// cout << "Breadth-first search done\n";
 	/***** end of breadth-first search *****/
+
+	/***** record the end time *****/
+	gettimeofday(&end, NULL);
 
 	/***** output file *****/
 	_clMemcpyD2H(queue, cl_map, sizeof(int) * area, &map[0]);
@@ -513,6 +534,13 @@ int main(int argc, char **argv){
 	}
 	/***** end of output file *****/
 
+	/***** calculate the elapsed time *****/
+	elapsedtime = (end.tv_sec - start.tv_sec) * 1.0 + (end.tv_usec - start.tv_usec) / 1000000.0;
+	cout << "Elapsed time: " << fixed << setprecision(2) << elapsedtime << " sec\n";
+
+	cout << "Kernel time: " << kerneltime / 1000.0 << " sec / " << kerneltime / elapsedtime / 10.0 << " %\n";
+	cout << "Memory copy time: " << memcpytime / 1000.0 << " sec / " << memcpytime / elapsedtime / 10.0 << " %\n";
+
 	/***** deallocate memory *****/
 	delete [] map;
 	delete [] mask;
@@ -523,8 +551,6 @@ int main(int argc, char **argv){
 	clReleaseProgram(program);
 	clReleaseMemObject(cl_map);
 	clReleaseMemObject(cl_mask);
-	clReleaseMemObject(cl_x_size);
-	clReleaseMemObject(cl_y_size);
 	clReleaseMemObject(cl_x_end);
 	clReleaseMemObject(cl_y_end);
 	clReleaseMemObject(cl_dist);
