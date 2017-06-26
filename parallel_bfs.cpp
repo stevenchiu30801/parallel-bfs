@@ -155,7 +155,7 @@ int main(int argc, char **argv){
 	int x_size, y_size, area;	// map size
 	int x_start, y_start, x_end, y_end;	// start and end point
 	int *map;
-	bool *mask;
+	bool *mask, *updating_mask;
 
 	char buf[MAX_LINE];
 	char *pch;
@@ -184,6 +184,9 @@ int main(int argc, char **argv){
 	mask = new bool[area];
 	for(int i = 0; i < area; i++)
 		mask[i] = false;
+	updating_mask = new bool[area];
+	for(int i = 0; i < area; i++)
+		updating_mask[i] = false;
 
 	file.getline(buf, MAX_LINE, '\r');
 	pch = strtok(buf, " \n");
@@ -289,17 +292,18 @@ int main(int argc, char **argv){
 	/***** create buffer/image on device *****/
 	/*	map[]
 	 *	mask[]
+	 *	updating_mask[]
 	 *	x_size, y_size
 	 *	x_end, y_end
-	 *	dist
 	 *	done
 	 */
-	map[x_start + y_start * x_size] = -3;	// add mask to start point
+	map[x_start + y_start * x_size] = 0;	// set start point to 0
+	mask[x_start + y_start * x_size] = true;	// add mask to start point
 	cl_mem cl_map = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int) * area, &map[0]);
 	cl_mem cl_mask = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(bool) * area, &mask[0]);
+	cl_mem cl_updating_mask = _clCreateBuf(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(bool) * area, &updating_mask[0]);
 	cl_mem cl_x_end = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &x_end);
 	cl_mem cl_y_end = _clCreateBuf(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int), &y_end);
-	cl_mem cl_dist = _clCreateBuf(context, CL_MEM_READ_ONLY, sizeof(int), NULL);
 	cl_mem cl_done = _clCreateBuf(context, CL_MEM_WRITE_ONLY, sizeof(bool), NULL);
 	cl_mem cl_found = _clCreateBuf(context, CL_MEM_WRITE_ONLY, sizeof(bool), NULL);
 
@@ -312,9 +316,9 @@ int main(int argc, char **argv){
 	if(program == NULL){
 		clReleaseMemObject(cl_map);
 		clReleaseMemObject(cl_mask);
+		clReleaseMemObject(cl_updating_mask);
 		clReleaseMemObject(cl_x_end);
 		clReleaseMemObject(cl_y_end);
-		clReleaseMemObject(cl_dist);
 		clReleaseMemObject(cl_done);
 		clReleaseMemObject(cl_found);
 		clReleaseCommandQueue(queue);
@@ -327,9 +331,10 @@ int main(int argc, char **argv){
 	if(kernel_1 == NULL){
 		clReleaseProgram(program);
 		clReleaseMemObject(cl_map);
+		clReleaseMemObject(cl_mask);
+		clReleaseMemObject(cl_updating_mask);
 		clReleaseMemObject(cl_x_end);
 		clReleaseMemObject(cl_y_end);
-		clReleaseMemObject(cl_dist);
 		clReleaseMemObject(cl_done);
 		clReleaseMemObject(cl_found);
 		clReleaseCommandQueue(queue);
@@ -341,9 +346,10 @@ int main(int argc, char **argv){
 		clReleaseKernel(kernel_1);
 		clReleaseProgram(program);
 		clReleaseMemObject(cl_map);
+		clReleaseMemObject(cl_mask);
+		clReleaseMemObject(cl_updating_mask);
 		clReleaseMemObject(cl_x_end);
 		clReleaseMemObject(cl_y_end);
-		clReleaseMemObject(cl_dist);
 		clReleaseMemObject(cl_done);
 		clReleaseMemObject(cl_found);
 		clReleaseCommandQueue(queue);
@@ -358,13 +364,10 @@ int main(int argc, char **argv){
 
 	/***** breadth-first search *****/
 	/*	map value notation
-	 *	-3 : mask, points to be traversed next stage
 	 *	-2 : blockages
 	 *	-1 : untraversed points
 	 *	>= 0 : distance from start point
 	 */
-	int dist = -1;
-	_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
 	bool found = false;	// true if end point is found
 	_clMemcpyH2D(queue, cl_found, sizeof(bool), &found);
 	bool done = false;
@@ -375,40 +378,40 @@ int main(int argc, char **argv){
 	struct timeval tmpstart, tmpend;
 
 	do{
-		gettimeofday(&tmpstart, NULL);
-		/***** memory write from host to device *****/		
+		/***** memory write from host to device *****/
 		if(++itrcnt >= itrmin){
+			gettimeofday(&tmpstart, NULL);
+			
 			done = true;	// true if bfs is done, i.e. all accessible points are traversed
 			_clMemcpyH2D(queue, cl_done, sizeof(bool), &done);
+			
+			gettimeofday(&tmpend, NULL);
+			memcpytime += (tmpend.tv_sec - tmpstart.tv_sec) * 1000.0 + (tmpend.tv_usec - tmpstart.tv_usec) / 1000.0;
 		}
-		dist++;	// distance from start point within this stage
-		_clMemcpyH2D(queue, cl_dist, sizeof(int), &dist);
-		
-		gettimeofday(&tmpend, NULL);
-		memcpytime += (tmpend.tv_sec - tmpstart.tv_sec) * 1000.0 + (tmpend.tv_usec - tmpstart.tv_usec) / 1000.0;
 
 		gettimeofday(&tmpstart, NULL);
 		/***** set kernel_1 argument *****/
 		int arg_idx = 0;
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_map);
-		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mask), &cl_mask);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_mask);
+		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_updating_mask);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_x_end);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_y_end);
-		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_dist);
-		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_done);
 		clSetKernelArg(kernel_1, arg_idx++, sizeof(cl_mem), &cl_found);
 
 		/***** enqueue command to execute kernel_1 *****/
 		size_t work_size[2] = {(size_t)x_size, (size_t)y_size};
 		err = clEnqueueNDRangeKernel(queue, kernel_1, 2, 0, work_size, NULL, 0, NULL, NULL);
 		if(err != CL_SUCCESS){
+			cout << "Unable to enqueue command to execute kernel\n";
 			clReleaseKernel(kernel_1);
 			clReleaseKernel(kernel_2);
 			clReleaseProgram(program);
 			clReleaseMemObject(cl_map);
+			clReleaseMemObject(cl_mask);
+			clReleaseMemObject(cl_updating_mask);
 			clReleaseMemObject(cl_x_end);
 			clReleaseMemObject(cl_y_end);
-			clReleaseMemObject(cl_dist);
 			clReleaseMemObject(cl_done);
 			clReleaseMemObject(cl_found);
 			clReleaseCommandQueue(queue);
@@ -418,19 +421,22 @@ int main(int argc, char **argv){
 
 		/***** set kernel_2 argument *****/
 		arg_idx = 0;
-		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_map);
 		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_mask);
+		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_updating_mask);
+		clSetKernelArg(kernel_2, arg_idx++, sizeof(cl_mem), &cl_done);
 
 		/***** enqueue command to execute kernel_2 *****/
 		err = clEnqueueNDRangeKernel(queue, kernel_2, 2, 0, work_size, NULL, 0, NULL, NULL);
 		if(err != CL_SUCCESS){
+			cout << "Unable to enqueue command to execute kernel\n";
 			clReleaseKernel(kernel_1);
 			clReleaseKernel(kernel_2);
 			clReleaseProgram(program);
 			clReleaseMemObject(cl_map);
+			clReleaseMemObject(cl_mask);
+			clReleaseMemObject(cl_updating_mask);
 			clReleaseMemObject(cl_x_end);
 			clReleaseMemObject(cl_y_end);
-			clReleaseMemObject(cl_dist);
 			clReleaseMemObject(cl_done);
 			clReleaseMemObject(cl_found);
 			clReleaseCommandQueue(queue);
@@ -544,6 +550,7 @@ int main(int argc, char **argv){
 	/***** deallocate memory *****/
 	delete [] map;
 	delete [] mask;
+	delete [] updating_mask;
 
 	/***** release OpenCL resources *****/
 	clReleaseKernel(kernel_1);
@@ -551,9 +558,9 @@ int main(int argc, char **argv){
 	clReleaseProgram(program);
 	clReleaseMemObject(cl_map);
 	clReleaseMemObject(cl_mask);
+	clReleaseMemObject(cl_updating_mask);
 	clReleaseMemObject(cl_x_end);
 	clReleaseMemObject(cl_y_end);
-	clReleaseMemObject(cl_dist);
 	clReleaseMemObject(cl_done);
 	clReleaseMemObject(cl_found);
 	clReleaseCommandQueue(queue);
